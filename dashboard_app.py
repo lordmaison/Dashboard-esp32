@@ -1,107 +1,207 @@
+
 import queue
-import time
+import math
+from datetime import datetime
+from collections import deque
+
 import pandas as pd
 import paho.mqtt.client as mqtt
 import streamlit as st
-from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# Conexión al Broker MQTT en la Nube
+
+# ==========================================
+# 1. CONFIGURACIÓN
+# ==========================================
+
 BROKER_IP = "broker.hivemq.com"
-TOPIC = "cybertwin/esp32/temperatura_ds18b20"
+BROKER_PORT = 1883
+TOPIC = "esp32/variables"
+
+MAX_REGISTROS = 30
+INTERVALO_ACTUALIZACION = "1s"
 
 st.set_page_config(
-    page_title="CyberTwin - Telemetría Wi-Fi Global",
+    page_title="Visualización de Variables",
     page_icon="🌡️",
     layout="wide",
 )
 
-st.title("🛡️ Dashboard CyberTwin: Monitoreo Remoto Wi-Fi (Cloud)")
-st.markdown(
-    "Acceso en tiempo real a las lecturas del sensor **DS18B20** transmitidas"
-    " por la **ESP32** a través de Internet."
-)
-st.divider()
+
+# ==========================================
+# 2. ESTADO DE LA APLICACIÓN
+# ==========================================
 
 if "data_queue" not in st.session_state:
-  st.session_state.data_queue = queue.Queue()
+    st.session_state.data_queue = queue.Queue()
 
-if "df_datos" not in st.session_state:
-  st.session_state.df_datos = pd.DataFrame(columns=["Tiempo", "Temperatura"])
+if "historial" not in st.session_state:
+    st.session_state.historial = deque(maxlen=MAX_REGISTROS)
+
+if "mqtt_connected" not in st.session_state:
+    st.session_state.mqtt_connected = False
+
+if "mqtt_error" not in st.session_state:
+    st.session_state.mqtt_error = None
 
 
-def on_connect(client, userdata, flags, rc):
-  if rc == 0:
-    client.subscribe(TOPIC)
+# ==========================================
+# 3. CALLBACKS MQTT
+# ==========================================
+
+def on_connect(client, userdata, flags, reason_code, properties):
+    if reason_code == 0:
+        client.subscribe(TOPIC)
+        userdata.put(("status", True))
+    else:
+        userdata.put(("status", False))
+
+
+def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
+    userdata.put(("status", False))
 
 
 def on_message(client, userdata, msg):
-  try:
-    valor_temp = float(msg.payload.decode("utf-8"))
-    st.session_state.data_queue.put(valor_temp)
-  except Exception:
-    pass
+    try:
+        temperatura = float(msg.payload.decode("utf-8").strip())
 
+        # Validación del rango del sensor DS18B20
+        if not math.isfinite(temperatura):
+            return
+
+        if not -55 <= temperatura <= 125:
+            return
+
+        userdata.put(("data", temperatura))
+
+    except (ValueError, UnicodeDecodeError):
+        pass
+
+
+# ==========================================
+# 4. INICIALIZACIÓN MQTT
+# ==========================================
 
 if "mqtt_client" not in st.session_state:
-  client = mqtt.Client()
-  client.on_connect = on_connect
-  client.on_message = on_message
-  try:
-    client.connect(BROKER_IP, 1883, 60)
-    client.loop_start()
 
-    if client._thread:
-      add_script_run_ctx(client._thread)
+    try:
+        client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            userdata=st.session_state.data_queue,
+        )
 
-    st.session_state.mqtt_client = client
-  except Exception as e:
-    st.error(f"Error al conectar con el Broker en la Nube: {e}")
+        client.on_connect = on_connect
+        client.on_disconnect = on_disconnect
+        client.on_message = on_message
 
-col1, col2, col3 = st.columns(3)
-metric_temp = col1.empty()
-metric_status = col2.empty()
-metric_max = col3.empty()
+        client.connect(BROKER_IP, BROKER_PORT, 60)
+        client.loop_start()
 
-chart_placeholder = st.empty()
-table_placeholder = st.empty()
+        st.session_state.mqtt_client = client
 
-while not st.session_state.data_queue.empty():
-  temp_recibida = st.session_state.data_queue.get()
-  hora_actual = time.strftime("%H:%M:%S")
-  nueva_lectura = pd.DataFrame(
-      [{"Tiempo": hora_actual, "Temperatura": temp_recibida}]
-  )
-  st.session_state.df_datos = pd.concat(
-      [st.session_state.df_datos, nueva_lectura], ignore_index=True
-  ).tail(30)
+    except Exception as e:
+        st.session_state.mqtt_error = str(e)
 
-df_historial = st.session_state.df_datos
 
-if not df_historial.empty:
-  temp_actual = df_historial["Temperatura"].iloc[-1]
-  metric_temp.metric(
-      label="Temperatura Actual", value=f"{temp_actual:.2f} °C"
-  )
-  metric_status.metric(
-      label="Estado de Red", value="Conectado a Nube (Wi-Fi Global) 🟢"
-  )
-  metric_max.metric(
-      label="Máxima Registrada",
-      value=f"{df_historial['Temperatura'].max():.2f} °C",
-  )
+# ==========================================
+# 5. INTERFAZ PRINCIPAL
+# ==========================================
 
-  chart_placeholder.line_chart(df_historial.set_index("Tiempo")["Temperatura"])
+st.title("🌡️ Dashboard: Monitoreo Remoto Wi-Fi")
 
-  with table_placeholder.container():
-    st.dataframe(df_historial.tail(5), use_container_width=True)
-else:
-  metric_status.metric(
-      label="Estado de Red", value="Esperando datos de la ESP32 en la Nube... ⏳"
-  )
-  st.info(
-      f"Suscripción activa al tópico global: '{TOPIC}'. Ejecuta main.py en la"
-      " ESP32 para visualizar las gráficas."
-  )
+st.markdown(
+    "Visualización en tiempo real de las lecturas del sensor "
+    "**DS18B20**, transmitidas mediante una **ESP32** "
+    "utilizando el protocolo MQTT."
+)
 
-time.sleep(1)
-st.rerun()
+st.divider()
+
+
+# ==========================================
+# 6. ACTUALIZACIÓN DEL DASHBOARD
+# ==========================================
+
+@st.fragment(run_every=INTERVALO_ACTUALIZACION)
+def dashboard():
+
+    # Procesar mensajes pendientes
+    while True:
+        try:
+            tipo, valor = st.session_state.data_queue.get_nowait()
+
+            if tipo == "status":
+                st.session_state.mqtt_connected = valor
+
+            elif tipo == "data":
+                registro = {
+                    "Tiempo": datetime.now().strftime("%H:%M:%S"),
+                    "Temperatura": valor,
+                }
+
+                st.session_state.historial.append(registro)
+
+        except queue.Empty:
+            break
+
+    df = pd.DataFrame(list(st.session_state.historial))
+
+    # Indicadores
+    col1, col2, col3 = st.columns(3)
+
+    if not df.empty:
+
+        temperatura_actual = df["Temperatura"].iloc[-1]
+        temperatura_maxima = df["Temperatura"].max()
+
+        col1.metric(
+            "Temperatura Actual",
+            f"{temperatura_actual:.2f} °C",
+        )
+
+        col3.metric(
+            "Máxima Registrada",
+            f"{temperatura_maxima:.2f} °C",
+        )
+
+    else:
+        col1.metric("Temperatura Actual", "-- °C")
+        col3.metric("Máxima Registrada", "-- °C")
+
+    if st.session_state.mqtt_connected:
+        col2.metric("Estado de Red", "Conectado 🟢")
+    else:
+        col2.metric("Estado de Red", "Desconectado 🔴")
+
+    # Gráfica e historial
+    if not df.empty:
+
+        st.subheader("📈 Temperatura en tiempo real")
+
+        st.line_chart(
+            df.set_index("Tiempo")["Temperatura"],
+            y_label="Temperatura (°C)",
+            x_label="Hora",
+        )
+
+        st.subheader("📋 Últimas lecturas")
+
+        st.dataframe(
+            df.tail(5),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    else:
+        st.info(
+            f"Esperando datos del sensor. "
+            f"Tópico MQTT: {TOPIC}"
+        )
+
+    if st.session_state.mqtt_error:
+        st.error(
+            f"Error de conexión MQTT: "
+            f"{st.session_state.mqtt_error}"
+        )
+
+
+dashboard()
