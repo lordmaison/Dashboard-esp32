@@ -19,6 +19,7 @@ TOPIC = "esp32/variables"
 MAX_MOSTRAR = 30
 INTERVALO_ACTUALIZACION = "1s"
 
+
 st.set_page_config(
     page_title="Visualización de Variables",
     page_icon="🌡️",
@@ -33,7 +34,6 @@ st.set_page_config(
 if "data_queue" not in st.session_state:
     st.session_state.data_queue = queue.Queue()
 
-# Historial completo, sin límite de registros
 if "historial" not in st.session_state:
     st.session_state.historial = []
 
@@ -45,12 +45,16 @@ if "mqtt_error" not in st.session_state:
 
 if "grafica_pausada" not in st.session_state:
     st.session_state.grafica_pausada = False
+
+if "historial_grafica" not in st.session_state:
+    st.session_state.historial_grafica = pd.DataFrame()
+
+
 # ==========================================
 # 3. FORMATO DE HORA
 # ==========================================
 
 def formato_hora(fecha_hora):
-
     return fecha_hora.strftime("%I:%M:%S%p").lstrip("0").lower()
 
 
@@ -157,22 +161,27 @@ def dashboard():
                     "Fecha": ahora.strftime("%Y-%m-%d"),
                     "Hora": formato_hora(ahora),
                     "Temperatura (°C)": valor,
+                    "Momento": ahora,
                 }
 
-                # Guardar sin eliminar registros anteriores
                 st.session_state.historial.append(registro)
 
         except queue.Empty:
             break
 
 
-    # DataFrame con TODO el historial
+    # DataFrame con todo el historial
     df = pd.DataFrame(
         st.session_state.historial,
-        columns=["Fecha", "Hora", "Temperatura (°C)"]
+        columns=[
+            "Fecha",
+            "Hora",
+            "Temperatura (°C)",
+            "Momento",
+        ]
     )
 
-    # DataFrame para visualización
+    # DataFrame para visualización general
     df_visual = df.tail(MAX_MOSTRAR)
 
 
@@ -184,7 +193,12 @@ def dashboard():
 
     if not df.empty:
 
-        csv = df.to_csv(index=False).encode("utf-8-sig")
+        # Exportar únicamente las columnas solicitadas
+        df_csv = df[
+            ["Fecha", "Hora", "Temperatura (°C)"]
+        ]
+
+        csv = df_csv.to_csv(index=False).encode("utf-8-sig")
 
         st.download_button(
             label="📥 Descargar historial completo CSV",
@@ -246,11 +260,8 @@ def dashboard():
         )
 
         if st.session_state.mqtt_connected:
-
             col5.metric("Estado de Red", "Conectado 🟢")
-
         else:
-
             col5.metric("Estado de Red", "Desconectado 🔴")
 
     else:
@@ -263,137 +274,148 @@ def dashboard():
         col4.metric("Temperatura Promedio", "-- °C")
 
         if st.session_state.mqtt_connected:
-
             col5.metric("Estado de Red", "Conectado 🟢")
-
         else:
-
             col5.metric("Estado de Red", "Desconectado 🔴")
 
 
     # ==========================================
-    # 10. GRÁFICA
+    # 10. GRÁFICA INTERACTIVA
     # ==========================================
 
-    if not df_visual.empty:
+    st.subheader("📈 Temperatura en tiempo real")
 
-        st.subheader("📈 Temperatura en tiempo real")
+    col_boton, col_estado = st.columns([1, 3])
 
-        # Información de las fechas mostradas
-        fecha_inicio = df_visual["Fecha"].iloc[0]
-        fecha_fin = df_visual["Fecha"].iloc[-1]
+    with col_boton:
 
-        if fecha_inicio == fecha_fin:
+        if st.session_state.grafica_pausada:
 
-            st.caption(f"Fecha de las lecturas: {fecha_inicio}")
+            if st.button("▶ Reanudar gráfica", key="reanudar_grafica"):
+
+                st.session_state.grafica_pausada = False
+                st.rerun()
 
         else:
 
-            st.caption(
-                f"Periodo de las lecturas: {fecha_inicio} a {fecha_fin}"
+            if st.button("⏸ Pausar gráfica", key="pausar_grafica"):
+
+                st.session_state.grafica_pausada = True
+                st.rerun()
+
+    with col_estado:
+
+        if st.session_state.grafica_pausada:
+            st.info("Gráfica pausada. Las lecturas siguen almacenándose.")
+        else:
+            st.success("Gráfica actualizándose.")
+
+
+    if not df.empty:
+
+        # Actualizar los datos de la gráfica solamente
+        # cuando no está pausada
+        if not st.session_state.grafica_pausada:
+
+            st.session_state.historial_grafica = (
+                df.tail(MAX_MOSTRAR).copy()
             )
 
-        # Gráfica con únicamente la hora en el eje X
-        st.line_chart(
-col_boton, col_estado = st.columns([1, 3])
+        df_grafica = st.session_state.historial_grafica.copy()
 
-with col_boton:
-    if st.session_state.grafica_pausada:
-        if st.button("▶ Reanudar gráfica"):
-            st.session_state.grafica_pausada = False
-            st.rerun()
+        if not df_grafica.empty:
+
+            # Información del periodo mostrado
+            fecha_inicio = df_grafica["Fecha"].iloc[0]
+            fecha_fin = df_grafica["Fecha"].iloc[-1]
+
+            if fecha_inicio == fecha_fin:
+
+                st.caption(f"Fecha de las lecturas: {fecha_inicio}")
+
+            else:
+
+                st.caption(
+                    f"Periodo de las lecturas: "
+                    f"{fecha_inicio} a {fecha_fin}"
+                )
+
+            # Gráfica basada en el momento real de cada lectura
+            # El eje X muestra únicamente la hora
+            puntos = alt.Chart(df_grafica).mark_circle(
+                size=150,
+                opacity=0.9
+            ).encode(
+
+                x=alt.X(
+                    "Momento:T",
+                    title="Hora",
+                    axis=alt.Axis(
+                        format="%-I:%M:%S%p",
+                        labelAngle=0
+                    )
+                ),
+
+                y=alt.Y(
+                    "Temperatura (°C):Q",
+                    title="Temperatura (°C)"
+                ),
+
+                tooltip=[
+                    alt.Tooltip("Fecha:N", title="Fecha"),
+                    alt.Tooltip("Hora:N", title="Hora"),
+                    alt.Tooltip(
+                        "Temperatura (°C):Q",
+                        title="Temperatura",
+                        format=".2f"
+                    )
+                ]
+            )
+
+            linea = alt.Chart(df_grafica).mark_line(
+                strokeWidth=2
+            ).encode(
+
+                x=alt.X(
+                    "Momento:T",
+                    title="Hora",
+                    axis=alt.Axis(
+                        format="%-I:%M:%S%p",
+                        labelAngle=0
+                    )
+                ),
+
+                y=alt.Y(
+                    "Temperatura (°C):Q",
+                    title="Temperatura (°C)"
+                )
+            )
+
+            grafica = (linea + puntos).properties(
+                height=350
+            ).interactive()
+
+            st.altair_chart(
+                grafica,
+                use_container_width=True
+            )
+
     else:
-        if st.button("⏸ Pausar gráfica"):
-            st.session_state.grafica_pausada = True
-            st.rerun()
 
-with col_estado:
-    if st.session_state.grafica_pausada:
-        st.info("Gráfica pausada. Las lecturas siguen almacenándose.")
-    else:
-        st.success("Gráfica actualizándose.")
-
-# Datos que se mostrarán
-if not df.empty:
-
-    # Si está pausada, conservar los datos que se estaban mostrando
-    if "historial_grafica" not in st.session_state:
-        st.session_state.historial_grafica = df.tail(MAX_MOSTRAR).copy()
-
-    if not st.session_state.grafica_pausada:
-        st.session_state.historial_grafica = df.tail(MAX_MOSTRAR).copy()
-
-    df_grafica = st.session_state.historial_grafica.copy()
-
-    # Información del periodo
-    fecha_inicio = df_grafica["Fecha"].iloc[0]
-    fecha_fin = df_grafica["Fecha"].iloc[-1]
-
-    if fecha_inicio == fecha_fin:
-        st.caption(f"Fecha de las lecturas: {fecha_inicio}")
-    else:
-        st.caption(
-            f"Periodo de las lecturas: {fecha_inicio} a {fecha_fin}"
-        )
-
-    # Crear identificador para diferenciar lecturas con la misma hora
-    df_grafica["Lectura"] = range(len(df_grafica))
-
-    # Gráfica interactiva
-    puntos = alt.Chart(df_grafica).mark_circle(
-        size=100,
-        opacity=0.9
-    ).encode(
-        x=alt.X(
-            "Hora:N",
-            title="Hora",
-            sort=alt.EncodingSortField(
-                field="Lectura",
-                order="ascending"
-            )
-        ),
-        y=alt.Y(
-            "Temperatura (°C):Q",
-            title="Temperatura (°C)"
-        ),
-        tooltip=[
-            alt.Tooltip("Fecha:N", title="Fecha"),
-            alt.Tooltip("Hora:N", title="Hora"),
-            alt.Tooltip(
-                "Temperatura (°C):Q",
-                title="Temperatura",
-                format=".2f"
-            )
-        ]
-    )
-
-    linea = alt.Chart(df_grafica).mark_line(
-        strokeWidth=2
-    ).encode(
-        x=alt.X(
-            "Hora:N",
-            sort=alt.EncodingSortField(
-                field="Lectura",
-                order="ascending"
-            )
-        ),
-        y="Temperatura (°C):Q"
-    )
-
-    grafica = (linea + puntos).properties(
-        height=350
-    ).interactive()
-        )
+        st.info("Esperando datos para generar la gráfica.")
 
 
-        # ==========================================
-        # 11. TABLA DE ÚLTIMAS LECTURAS
-        # ==========================================
+    # ==========================================
+    # 11. TABLA DE ÚLTIMAS LECTURAS
+    # ==========================================
 
-        st.subheader("📋 Últimas lecturas")
+    st.subheader("📋 Últimas lecturas")
 
-        # Mostrar únicamente los cinco registros más recientes
-        df_tabla = df_visual.tail(5)
+    if not df.empty:
+
+        df_tabla = df_visual[
+            ["Fecha", "Hora", "Temperatura (°C)"]
+        ].tail(5)
 
         st.dataframe(
             df_tabla,
