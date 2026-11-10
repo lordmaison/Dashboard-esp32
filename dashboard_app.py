@@ -1,5 +1,6 @@
 import queue
 import math
+import altair as alt
 from datetime import datetime
 
 import pandas as pd
@@ -42,7 +43,8 @@ if "mqtt_connected" not in st.session_state:
 if "mqtt_error" not in st.session_state:
     st.session_state.mqtt_error = None
 
-
+if "grafica_pausada" not in st.session_state:
+    st.session_state.grafica_pausada = False
 # ==========================================
 # 3. FORMATO DE HORA
 # ==========================================
@@ -293,9 +295,94 @@ def dashboard():
 
         # Gráfica con únicamente la hora en el eje X
         st.line_chart(
-            df_visual.set_index("Hora")["Temperatura (°C)"],
-            y_label="Temperatura (°C)",
-            x_label="Hora",
+col_boton, col_estado = st.columns([1, 3])
+
+with col_boton:
+    if st.session_state.grafica_pausada:
+        if st.button("▶ Reanudar gráfica"):
+            st.session_state.grafica_pausada = False
+            st.rerun()
+    else:
+        if st.button("⏸ Pausar gráfica"):
+            st.session_state.grafica_pausada = True
+            st.rerun()
+
+with col_estado:
+    if st.session_state.grafica_pausada:
+        st.info("Gráfica pausada. Las lecturas siguen almacenándose.")
+    else:
+        st.success("Gráfica actualizándose.")
+
+# Datos que se mostrarán
+if not df.empty:
+
+    # Si está pausada, conservar los datos que se estaban mostrando
+    if "historial_grafica" not in st.session_state:
+        st.session_state.historial_grafica = df.tail(MAX_MOSTRAR).copy()
+
+    if not st.session_state.grafica_pausada:
+        st.session_state.historial_grafica = df.tail(MAX_MOSTRAR).copy()
+
+    df_grafica = st.session_state.historial_grafica.copy()
+
+    # Información del periodo
+    fecha_inicio = df_grafica["Fecha"].iloc[0]
+    fecha_fin = df_grafica["Fecha"].iloc[-1]
+
+    if fecha_inicio == fecha_fin:
+        st.caption(f"Fecha de las lecturas: {fecha_inicio}")
+    else:
+        st.caption(
+            f"Periodo de las lecturas: {fecha_inicio} a {fecha_fin}"
+        )
+
+    # Crear identificador para diferenciar lecturas con la misma hora
+    df_grafica["Lectura"] = range(len(df_grafica))
+
+    # Gráfica interactiva
+    puntos = alt.Chart(df_grafica).mark_circle(
+        size=100,
+        opacity=0.9
+    ).encode(
+        x=alt.X(
+            "Hora:N",
+            title="Hora",
+            sort=alt.EncodingSortField(
+                field="Lectura",
+                order="ascending"
+            )
+        ),
+        y=alt.Y(
+            "Temperatura (°C):Q",
+            title="Temperatura (°C)"
+        ),
+        tooltip=[
+            alt.Tooltip("Fecha:N", title="Fecha"),
+            alt.Tooltip("Hora:N", title="Hora"),
+            alt.Tooltip(
+                "Temperatura (°C):Q",
+                title="Temperatura",
+                format=".2f"
+            )
+        ]
+    )
+
+    linea = alt.Chart(df_grafica).mark_line(
+        strokeWidth=2
+    ).encode(
+        x=alt.X(
+            "Hora:N",
+            sort=alt.EncodingSortField(
+                field="Lectura",
+                order="ascending"
+            )
+        ),
+        y="Temperatura (°C):Q"
+    )
+
+    grafica = (linea + puntos).properties(
+        height=350
+    ).interactive()
         )
 
 
