@@ -2,7 +2,6 @@
 import queue
 import math
 from datetime import datetime
-from collections import deque
 
 import pandas as pd
 import paho.mqtt.client as mqtt
@@ -17,7 +16,7 @@ BROKER_IP = "broker.hivemq.com"
 BROKER_PORT = 1883
 TOPIC = "esp32/variables"
 
-MAX_REGISTROS = 30
+MAX_MOSTRAR = 30
 INTERVALO_ACTUALIZACION = "1s"
 
 st.set_page_config(
@@ -34,8 +33,9 @@ st.set_page_config(
 if "data_queue" not in st.session_state:
     st.session_state.data_queue = queue.Queue()
 
+# Historial completo, sin límite de registros
 if "historial" not in st.session_state:
-    st.session_state.historial = deque(maxlen=MAX_REGISTROS)
+    st.session_state.historial = []
 
 if "mqtt_connected" not in st.session_state:
     st.session_state.mqtt_connected = False
@@ -49,6 +49,7 @@ if "mqtt_error" not in st.session_state:
 # ==========================================
 
 def on_connect(client, userdata, flags, reason_code, properties):
+
     if reason_code == 0:
         client.subscribe(TOPIC)
         userdata.put(("status", True))
@@ -57,14 +58,15 @@ def on_connect(client, userdata, flags, reason_code, properties):
 
 
 def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
+
     userdata.put(("status", False))
 
 
 def on_message(client, userdata, msg):
+
     try:
         temperatura = float(msg.payload.decode("utf-8").strip())
 
-        # Validación del rango del sensor DS18B20
         if not math.isfinite(temperatura):
             return
 
@@ -84,6 +86,7 @@ def on_message(client, userdata, msg):
 if "mqtt_client" not in st.session_state:
 
     try:
+
         client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             userdata=st.session_state.data_queue,
@@ -99,6 +102,7 @@ if "mqtt_client" not in st.session_state:
         st.session_state.mqtt_client = client
 
     except Exception as e:
+
         st.session_state.mqtt_error = str(e)
 
 
@@ -126,29 +130,41 @@ def dashboard():
 
     # Procesar mensajes pendientes
     while True:
+
         try:
+
             tipo, valor = st.session_state.data_queue.get_nowait()
 
             if tipo == "status":
+
                 st.session_state.mqtt_connected = valor
 
             elif tipo == "data":
+
                 registro = {
-                    "Tiempo": datetime.now().strftime("%H:%M:%S"),
+                    "Tiempo": datetime.now().strftime(
+                        "%Y-%m-%d %H:%M:%S.%f"
+                    )[:-3],
+
                     "Temperatura": valor,
                 }
 
+                # Guardar sin eliminar registros anteriores
                 st.session_state.historial.append(registro)
 
         except queue.Empty:
             break
 
-    # Crear DataFrame
-    df = pd.DataFrame(list(st.session_state.historial))
+
+    # DataFrame con TODO el historial
+    df = pd.DataFrame(st.session_state.historial)
+
+    # DataFrame para visualización
+    df_visual = df.tail(MAX_MOSTRAR)
 
 
     # ==========================================
-    # 7. EXPORTACIÓN DE DATOS CSV
+    # 7. EXPORTACIÓN CSV
     # ==========================================
 
     st.subheader("📥 Exportación de datos")
@@ -158,26 +174,27 @@ def dashboard():
         csv = df.to_csv(index=False).encode("utf-8-sig")
 
         st.download_button(
-            label="📥 Descargar datos CSV",
+            label="📥 Descargar historial completo CSV",
             data=csv,
-            file_name="registro_temperaturas.csv",
+            file_name="historial_completo_temperaturas.csv",
             mime="text/csv",
             key="descargar_csv",
         )
 
         st.caption(
-            f"El archivo contiene {len(df)} registros "
-            "de temperatura."
+            f"Registros almacenados: {len(df)} | "
+            f"Registros exportados: {len(df)}"
         )
 
     else:
+
         st.button(
-            "📥 Descargar datos CSV",
+            "📥 Descargar historial completo CSV",
             disabled=True,
             key="descargar_csv_vacio",
         )
 
-        st.caption("No hay datos disponibles para exportar.")
+        st.caption("Esperando datos para generar el archivo CSV.")
 
 
     # ==========================================
@@ -202,38 +219,49 @@ def dashboard():
         )
 
     else:
+
         col1.metric("Temperatura Actual", "-- °C")
         col3.metric("Máxima Registrada", "-- °C")
 
+
     if st.session_state.mqtt_connected:
+
         col2.metric("Estado de Red", "Conectado 🟢")
+
     else:
+
         col2.metric("Estado de Red", "Desconectado 🔴")
 
 
     # ==========================================
-    # 9. GRÁFICA E HISTORIAL
+    # 9. GRÁFICA
     # ==========================================
 
-    if not df.empty:
+    if not df_visual.empty:
 
         st.subheader("📈 Temperatura en tiempo real")
 
         st.line_chart(
-            df.set_index("Tiempo")["Temperatura"],
+            df_visual.set_index("Tiempo")["Temperatura"],
             y_label="Temperatura (°C)",
-            x_label="Hora",
+            x_label="Fecha y hora",
         )
+
+
+        # ==========================================
+        # 10. TABLA DE LECTURAS
+        # ==========================================
 
         st.subheader("📋 Últimas lecturas")
 
         st.dataframe(
-            df.tail(5),
+            df_visual.tail(5),
             use_container_width=True,
             hide_index=True,
         )
 
     else:
+
         st.info(
             f"Esperando datos del sensor. "
             f"Tópico MQTT: {TOPIC}"
@@ -241,10 +269,11 @@ def dashboard():
 
 
     # ==========================================
-    # 10. ERRORES MQTT
+    # 11. ERRORES MQTT
     # ==========================================
 
     if st.session_state.mqtt_error:
+
         st.error(
             f"Error de conexión MQTT: "
             f"{st.session_state.mqtt_error}"
@@ -252,7 +281,7 @@ def dashboard():
 
 
 # ==========================================
-# 11. EJECUTAR DASHBOARD
+# 12. EJECUTAR DASHBOARD
 # ==========================================
 
 dashboard()
