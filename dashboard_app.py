@@ -142,31 +142,29 @@ st.divider()
 @st.fragment(run_every=INTERVALO_ACTUALIZACION)
 def dashboard():
 
-    # Procesar mensajes pendientes
+     # Procesar mensajes pendientes
     while True:
 
         try:
-
             tipo, valor = st.session_state.data_queue.get_nowait()
 
             if tipo == "status":
-
                 st.session_state.mqtt_connected = valor
 
-        elif tipo == "data":
+            elif tipo == "data":
 
-            # Obtener fecha y hora de Bogotá
-            ahora = datetime.now(ZoneInfo("America/Bogota"))
+                # Obtener fecha y hora de Bogotá
+                ahora = datetime.now(ZoneInfo("America/Bogota"))
 
-            registro = {
-                "Fecha": ahora.strftime("%Y-%m-%d"),
-                "Hora": formato_hora(ahora),
-                "Temperatura (°C)": valor,
-                "Momento": ahora,
-            }
+                registro = {
+                    "Fecha": ahora.strftime("%Y-%m-%d"),
+                    "Hora": formato_hora(ahora),
+                    "Temperatura (°C)": valor,
+                    "Momento": ahora,
+                }
 
-            # Guardar la lectura en el historial
-            st.session_state.historial.append(registro)
+                # Guardar la lectura en el historial
+                st.session_state.historial.append(registro)
 
         except queue.Empty:
             break
