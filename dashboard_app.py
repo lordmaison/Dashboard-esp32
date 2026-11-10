@@ -1,4 +1,3 @@
-
 import queue
 import math
 from datetime import datetime
@@ -45,7 +44,16 @@ if "mqtt_error" not in st.session_state:
 
 
 # ==========================================
-# 3. CALLBACKS MQTT
+# 3. FORMATO DE HORA
+# ==========================================
+
+def formato_hora(fecha_hora):
+
+    return fecha_hora.strftime("%I:%M:%S%p").lstrip("0").lower()
+
+
+# ==========================================
+# 4. CALLBACKS MQTT
 # ==========================================
 
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -80,7 +88,7 @@ def on_message(client, userdata, msg):
 
 
 # ==========================================
-# 4. INICIALIZACIÓN MQTT
+# 5. INICIALIZACIÓN MQTT
 # ==========================================
 
 if "mqtt_client" not in st.session_state:
@@ -107,7 +115,7 @@ if "mqtt_client" not in st.session_state:
 
 
 # ==========================================
-# 5. INTERFAZ PRINCIPAL
+# 6. INTERFAZ PRINCIPAL
 # ==========================================
 
 st.title("🌡️ Dashboard: Monitoreo Remoto Wi-Fi")
@@ -122,7 +130,7 @@ st.divider()
 
 
 # ==========================================
-# 6. ACTUALIZACIÓN DEL DASHBOARD
+# 7. ACTUALIZACIÓN DEL DASHBOARD
 # ==========================================
 
 @st.fragment(run_every=INTERVALO_ACTUALIZACION)
@@ -141,12 +149,12 @@ def dashboard():
 
             elif tipo == "data":
 
-                registro = {
-                    "Tiempo": datetime.now().strftime(
-                        "%Y-%m-%d %H:%M:%S.%f"
-                    )[:-3],
+                ahora = datetime.now()
 
-                    "Temperatura": valor,
+                registro = {
+                    "Fecha": ahora.strftime("%Y-%m-%d"),
+                    "Hora": formato_hora(ahora),
+                    "Temperatura (°C)": valor,
                 }
 
                 # Guardar sin eliminar registros anteriores
@@ -157,14 +165,17 @@ def dashboard():
 
 
     # DataFrame con TODO el historial
-    df = pd.DataFrame(st.session_state.historial)
+    df = pd.DataFrame(
+        st.session_state.historial,
+        columns=["Fecha", "Hora", "Temperatura (°C)"]
+    )
 
     # DataFrame para visualización
     df_visual = df.tail(MAX_MOSTRAR)
 
 
     # ==========================================
-    # 7. EXPORTACIÓN CSV
+    # 8. EXPORTACIÓN CSV
     # ==========================================
 
     st.subheader("📥 Exportación de datos")
@@ -198,64 +209,107 @@ def dashboard():
 
 
     # ==========================================
-    # 8. INDICADORES
+    # 9. INDICADORES DE TEMPERATURA
     # ==========================================
 
-    col1, col2, col3 = st.columns(3)
+    st.subheader("📊 Indicadores")
 
     if not df.empty:
 
-        temperatura_actual = df["Temperatura"].iloc[-1]
-        temperatura_maxima = df["Temperatura"].max()
+        temperatura_actual = df["Temperatura (°C)"].iloc[-1]
+        temperatura_minima = df["Temperatura (°C)"].min()
+        temperatura_maxima = df["Temperatura (°C)"].max()
+        temperatura_promedio = df["Temperatura (°C)"].mean()
+
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         col1.metric(
             "Temperatura Actual",
-            f"{temperatura_actual:.2f} °C",
+            f"{temperatura_actual:.2f} °C"
+        )
+
+        col2.metric(
+            "Temperatura Mínima",
+            f"{temperatura_minima:.2f} °C"
         )
 
         col3.metric(
-            "Máxima Registrada",
-            f"{temperatura_maxima:.2f} °C",
+            "Temperatura Máxima",
+            f"{temperatura_maxima:.2f} °C"
         )
 
+        col4.metric(
+            "Temperatura Promedio",
+            f"{temperatura_promedio:.2f} °C"
+        )
+
+        if st.session_state.mqtt_connected:
+
+            col5.metric("Estado de Red", "Conectado 🟢")
+
+        else:
+
+            col5.metric("Estado de Red", "Desconectado 🔴")
+
     else:
+
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         col1.metric("Temperatura Actual", "-- °C")
-        col3.metric("Máxima Registrada", "-- °C")
+        col2.metric("Temperatura Mínima", "-- °C")
+        col3.metric("Temperatura Máxima", "-- °C")
+        col4.metric("Temperatura Promedio", "-- °C")
 
+        if st.session_state.mqtt_connected:
 
-    if st.session_state.mqtt_connected:
+            col5.metric("Estado de Red", "Conectado 🟢")
 
-        col2.metric("Estado de Red", "Conectado 🟢")
+        else:
 
-    else:
-
-        col2.metric("Estado de Red", "Desconectado 🔴")
+            col5.metric("Estado de Red", "Desconectado 🔴")
 
 
     # ==========================================
-    # 9. GRÁFICA
+    # 10. GRÁFICA
     # ==========================================
 
     if not df_visual.empty:
 
         st.subheader("📈 Temperatura en tiempo real")
 
+        # Información de las fechas mostradas
+        fecha_inicio = df_visual["Fecha"].iloc[0]
+        fecha_fin = df_visual["Fecha"].iloc[-1]
+
+        if fecha_inicio == fecha_fin:
+
+            st.caption(f"Fecha de las lecturas: {fecha_inicio}")
+
+        else:
+
+            st.caption(
+                f"Periodo de las lecturas: {fecha_inicio} a {fecha_fin}"
+            )
+
+        # Gráfica con únicamente la hora en el eje X
         st.line_chart(
-            df_visual.set_index("Tiempo")["Temperatura"],
+            df_visual.set_index("Hora")["Temperatura (°C)"],
             y_label="Temperatura (°C)",
-            x_label="Fecha y hora",
+            x_label="Hora",
         )
 
 
         # ==========================================
-        # 10. TABLA DE LECTURAS
+        # 11. TABLA DE ÚLTIMAS LECTURAS
         # ==========================================
 
         st.subheader("📋 Últimas lecturas")
 
+        # Mostrar únicamente los cinco registros más recientes
+        df_tabla = df_visual.tail(5)
+
         st.dataframe(
-            df_visual.tail(5),
+            df_tabla,
             use_container_width=True,
             hide_index=True,
         )
@@ -269,7 +323,7 @@ def dashboard():
 
 
     # ==========================================
-    # 11. ERRORES MQTT
+    # 12. ERRORES MQTT
     # ==========================================
 
     if st.session_state.mqtt_error:
@@ -281,7 +335,7 @@ def dashboard():
 
 
 # ==========================================
-# 12. EJECUTAR DASHBOARD
+# 13. EJECUTAR DASHBOARD
 # ==========================================
 
 dashboard()
