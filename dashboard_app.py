@@ -1,12 +1,12 @@
 import queue
 import math
 import altair as alt
-from datetime import datetime
-
 import pandas as pd
 import paho.mqtt.client as mqtt
 import streamlit as st
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # ==========================================
 # 1. CONFIGURACIÓN
@@ -153,18 +153,20 @@ def dashboard():
 
                 st.session_state.mqtt_connected = valor
 
-            elif tipo == "data":
+        elif tipo == "data":
 
-                ahora = datetime.now()
+            # Obtener fecha y hora de Bogotá
+            ahora = datetime.now(ZoneInfo("America/Bogota"))
 
-                registro = {
-                    "Fecha": ahora.strftime("%Y-%m-%d"),
-                    "Hora": formato_hora(ahora),
-                    "Temperatura (°C)": valor,
-                    "Momento": ahora,
-                }
+            registro = {
+                "Fecha": ahora.strftime("%Y-%m-%d"),
+                "Hora": formato_hora(ahora),
+                "Temperatura (°C)": valor,
+                "Momento": ahora,
+            }
 
-                st.session_state.historial.append(registro)
+            # Guardar la lectura en el historial
+            st.session_state.historial.append(registro)
 
         except queue.Empty:
             break
